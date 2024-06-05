@@ -1,4 +1,10 @@
-import telebot
+import asyncio
+import logging
+from aiogram import Bot, Dispatcher, types, Router
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.memory import MemoryStorage
 import webbrowser
 import sqlite3
 import requests
@@ -6,10 +12,16 @@ import keys
 import weatherController
 
 bot_key = keys.bot_key
-bot = telebot.TeleBot(bot_key)
+bot = Bot(bot_key)
+dp = Dispatcher(storage=MemoryStorage())
+router = Router()
+dp.include_router(router)
     
-@bot.message_handler(commands=['start'])
-def main(message):
+class ChoseCountry(StatesGroup):
+    choosing_country_name = State()
+    
+@dp.message(Command('start'))
+async def start(message: types.Message):
     conn = sqlite3.connect("aiogram.sqlite3")
     cur = conn.cursor()
     cur.execute('CREATE TABLE IF NOT EXISTS users(id int auto_increment primary key, name varchar(50))')
@@ -18,10 +30,11 @@ def main(message):
     conn.commit()
     cur.close()
     conn.close()
-    bot.send_message(message.chat.id, f"Hello {message.from_user.first_name}!")
+    #await bot.send_message(message.chat.id, f"Hello {message.from_user.first_name}!")
+    await message.answer(f"Hello {message.from_user.first_name}!")
 
-@bot.message_handler(commands=['get_users'])
-def get_users(message):
+@dp.message(Command('get_users'))
+async def get_users(message):
     conn = sqlite3.connect("aiogram.sqlite3")
     cur = conn.cursor()
     cur.execute('SELECT name FROM users')
@@ -32,36 +45,39 @@ def get_users(message):
     cur.close()
     conn.close()
     if all_users == "":
-        bot.send_message(message.chat.id, f"no users")
+        await message.answer(f"no users")
     else:
-        bot.send_message(message.chat.id, f"{all_users}")
+        await message.answer(f"{all_users}")
     
-@bot.message_handler(commands=['delete_users'])
-def delete_users(message):
+@dp.message(Command('delete_users'))
+async def delete_users(message):
     conn = sqlite3.connect("aiogram.sqlite3")
     cur = conn.cursor()
     cur.execute('DELETE FROM users')
     conn.commit()
     cur.close()
     conn.close()
-    bot.send_message(message.chat.id, f"all users deleted")
+    await message.answer( f"all users deleted")
     
-@bot.message_handler(commands=['weather'])
-def get_weather(message):
-    bot.send_message(message.chat.id, "Enter city")
-    bot.register_next_step_handler(message, get_city)
 
-def get_city(message):
+@router.message(Command('weather'), StateFilter(None))
+async def get_weather(message: types.Message, state: FSMContext):
+    await message.answer("Enter city")
+    await state.set_state(ChoseCountry.choosing_country_name)
+
+@router.message(StateFilter(ChoseCountry.choosing_country_name))
+async def get_city(message: types.Message, state: FSMContext):
     city = message.text.strip()
     weather = weatherController.getCityWeather(city)
     if weather is not None:
-        icon = weather['icon'][2:] # idk why it starts with "//"
-        bot.send_photo(message.chat.id, caption=f"{weather['city']}\n{weather['temperature']} C\n{weather['description']}", photo=icon)
+        icon_url = f"https://{weather['icon'][2:]}"
+        await message.answer_photo(photo=icon_url, caption=f"{weather['city']}\n{weather['temperature']} °C\n{weather['description']}")
     else:
-        bot.send_message(message.chat.id, "City not found")
+        await message.answer("City not found")
+    await state.clear()
     
-@bot.message_handler(commands=['site'])
-def main(message):
+@dp.message(Command('site'))
+async def main(message):
     msg = message.text
     if " " in msg:
         msg = msg.split()[1]
@@ -69,16 +85,15 @@ def main(message):
         msg = "google.com"
     webbrowser.open(f"https://{msg}")
 
-@bot.message_handler()
-def info(message):
+@dp.message()
+async def info(message):
     if message.text == "id":
-        bot.send_message(message.chat.id, f"{message.from_user.id}")
+        await message.answer(f"{message.from_user.id}")
     if message.text == "info":
-        bot.send_message(message.chat.id, f"{message}")
+        await message.answer(f"{message}")
         
-@bot.message_handler(content_types=['photo'])
-def get_photo(message):
-    bot.reply_to(message, "ok")
-    
-    
-bot.polling(none_stop=True)
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
